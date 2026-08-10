@@ -1,11 +1,17 @@
 # Epomaker RT100 (ROYUAN, vendor 3151) — USB-wired HID control.
 #
 # Why this exists:
-#   EpomakerController does `import hid`, which in the cython-hidapi build is
-#   the *libusb* backend (see cython-hidapi/setup.py: libusb is the Linux
-#   default). That backend talks to /dev/bus/usb/BBB/DDD, which is root-only
-#   by default. The ACLs systemd-logind already puts on /dev/hidraw* do NOT
-#   help, because the libusb backend never opens those nodes.
+#   `import hid` resolves to one of two backends, and they use different device
+#   nodes -- so BOTH have to be granted or the app works on one machine and not
+#   another:
+#
+#     libusb  (pip `hidapi` default)      -> /dev/bus/usb/BBB/DDD
+#     hidraw  (Arch `python-hidapi`)      -> /dev/hidraw*
+#
+#   Both are root-only by default. logind does not tag either for this device,
+#   so neither gets an ACL without the rules below. Tell them apart with
+#   hid.enumerate(): libusb returns one entry per interface, hidraw one per HID
+#   collection (so interface 1 appears several times on an RT100).
 #
 # Why the filename starts with 70 and not 99:
 #   /usr/lib/udev/rules.d/73-seat-late.rules is what turns TAG=="uaccess" into
@@ -30,3 +36,11 @@ SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="3151", ATTR{idPro
 # so the dongle needs the same access as the cable to be testable at all.
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="3151", ATTR{idProduct}=="4011", TAG+="uaccess"
 SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="3151", ATTR{idProduct}=="4016", TAG+="uaccess"
+
+# hidraw backend. ATTRS{} walks up to the USB device, so this matches every
+# hidraw node belonging to the keyboard regardless of which interface or
+# collection it came from.
+KERNEL=="hidraw*", ATTRS{idVendor}=="3151", ATTRS{idProduct}=="4010", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3151", ATTRS{idProduct}=="4015", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3151", ATTRS{idProduct}=="4011", TAG+="uaccess"
+KERNEL=="hidraw*", ATTRS{idVendor}=="3151", ATTRS{idProduct}=="4016", TAG+="uaccess"

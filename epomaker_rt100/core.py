@@ -298,11 +298,14 @@ IMAGE_PACKET_DELAY_S = 0.0
 DAEMON_SEND_SPACING = 1.6
 
 def _udev_fix_message() -> str:
-    """Permission help matching how this copy was installed.
+    """Permission help matching how this copy was installed, and which backend.
 
-    A packaged install already has the rule at /usr/lib/udev/rules.d and has no
-    udev/ directory to copy from, so telling the user to run
-    `install -m644 udev/...` there just produces "cannot stat".
+    Two things vary and both change the answer:
+
+    * whether the rule is already on disk (a packaged install puts it in
+      /usr/lib/udev/rules.d and has no udev/ directory to copy from)
+    * which hidapi backend is in use, because they need different device nodes:
+      libusb wants /dev/bus/usb/..., hidraw wants /dev/hidraw*
     """
     have_rule = any(
         Path(p).exists()
@@ -311,28 +314,32 @@ def _udev_fix_message() -> str:
             "/usr/lib/udev/rules.d/70-epomaker-rt100.rules",
         )
     )
+    nl = chr(10)
 
     if have_rule:
-        lead = "The udev rule is installed, but the running system has not applied it yet:"
+        lead = ("The udev rule is installed, but the running system has not "
+                "applied it yet:")
         install_step = ""
     else:
         lead = ("Install the udev rule. The filename must sort before "
                 "73-seat-late.rules, or the uaccess tag is ignored:")
         install_step = (
-            "  sudo install -m644 udev/70-epomaker-rt100.rules /etc/udev/rules.d/"
-            + chr(10)
+            "  sudo install -m644 udev/70-epomaker-rt100.rules "
+            "/etc/udev/rules.d/" + nl
         )
 
-    nl = chr(10)
     return (
-        "A permission error came back from the keyboard." + nl * 2
-        + "The hidapi libusb backend needs write access to the USB device node, "
-        "which the /dev/hidraw* ACLs do not cover." + nl * 2
+        "The keyboard could not be opened." + nl * 2
+        + "This is usually permissions, but the same error appears when "
+        "something else already has the device open -- check that the screen "
+        "updater service is not running." + nl * 2
         + lead + nl * 2
         + install_step
         + "  sudo udevadm control --reload-rules && sudo udevadm trigger" + nl * 2
-        + "Then unplug and replug the keyboard. This app will not escalate "
-        "privileges itself."
+        + "Then unplug and replug the keyboard." + nl * 2
+        + "The rule must grant both /dev/bus/usb (libusb backend) and "
+        "/dev/hidraw* (hidraw backend); which one applies depends on how "
+        "hidapi was built. This app will not escalate privileges itself."
     )
 
 
