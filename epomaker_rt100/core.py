@@ -1039,3 +1039,183 @@ def run_daemon(sensor: str | None, interface: int = DEFAULT_INTERFACE) -> int:
                 pass
     print("Screen updater stopped.", flush=True)
     return 0
+
+
+# --------------------------------------------------------------------------- #
+# Follow desktop colours
+#
+# Paints one group of keys in the desktop's accent colour and every other key
+# in its text colour, whenever something (a theme hook, a file watcher, the
+# "Sync now" button) runs ``epomaker-rt100-daemon --sync-theme``. The front ends
+# only edit the settings; all device work lives here so they cannot disagree.
+# --------------------------------------------------------------------------- #
+
+THEME_SYNC_DEFAULT_KEYS = [
+    "LEFT_SHIFT", "RIGHT_SHIFT", "LEFT_CTRL", "RIGHT_CTRL",
+    "LEFT_ALT", "RIGHT_ALT", "LEFT_WIN", "FN",
+]
+
+# A key frame is a flash write, and back-to-back writes have killed this
+# family's endpoint until replug (sharkfin docs/PROTOCOL.md: two uploads per 10 s
+# survives, two per 5 s stalls). A colour picker dragged in another app can
+# rewrite its config many times a second, so requests are coalesced and spaced.
+THEME_SYNC_SETTLE_S = 1.0
+THEME_SYNC_MIN_GAP_S = 5.0
+
+
+def _runtime_dir() -> Path:
+    return Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir())
+
+
+def _read_toml(path: Path) -> dict:
+    import tomllib
+
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _hex_rgb(value) -> tuple[int, int, int] | None:
+    text = str(value or "").strip().lstrip("#")
+    if len(text) != 6:
+        return None
+    try:
+        return tuple(bytes.fromhex(text))  # type: ignore[return-value]
+    except ValueError:
+        return None
+
+
+def vivid(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Same hue at full saturation and brightness.
+
+    Desktop accents are often pastels, and the RT100's LEDs wash those out to
+    near-white. A colour with no real hue (max-min below 20) becomes white.
+    """
+    high, low = max(rgb), min(rgb)
+    if high - low < 20:
+        return (255, 255, 255)
+    return tuple(round((c - low) * 255 / (high - low)) for c in rgb)  # type: ignore[return-value]
+
+
+def desktop_colours() -> tuple[tuple[int, int, int], tuple[int, int, int]] | None:
+    """(accent, text) from the desktop, or None when no source is found.
+
+    The only source so far is Omarchy: the bar background override in
+    ~/.config/omarchy/shell.toml (set by bar-colour plugins) wins over the
+    current theme's ``accent``; text is the theme's ``foreground``.
+    """
+    config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+    theme = _read_toml(state / "omarchy" / "current" / "theme" / "colors.toml")
+    bar = _read_toml(config / "omarchy" / "shell.toml").get("bar", {})
+    accent = _hex_rgb(bar.get("background")) or _hex_rgb(theme.get("accent"))
+    text = _hex_rgb(theme.get("foreground"))
+    if accent is None or text is None:
+        return None
+    return accent, text
+
+
+def theme_key_colours(
+    keys, accent_names: Iterable[str], accent, text, backslash_name: str = "HASH"
+) -> dict[int, tuple[int, int, int]]:
+    """LED index -> colour: accent on the named keys, text on everything else.
+
+    BACKSLASH resolves through the calibrated name, as in the front ends.
+    """
+    wanted = {backslash_name if n == "BACKSLASH" else n for n in accent_names}
+    return {key.value: (accent if key.name in wanted else text) for key in keys}
+
+
+def _restore_screen(device: "RT100", settings: dict) -> str:
+    """Put the remembered picture back; a key-RGB write blanks the screen."""
+    remembered = settings.get("last_image")
+    if not settings.get("restore_screen", True) or not remembered:
+        return ""
+    try:
+        frames = load_frames(remembered["path"])
+        bar = _hex_rgb(remembered.get("bar")) or (0, 0, 0)
+        mode = remembered.get("fit", "letterbox")
+        if remembered.get("animated") and len(frames) > 1:
+            handle, temp = tempfile.mkstemp(prefix="rt100-anim-", suffix=".gif")
+            os.close(handle)
+            try:
+                render_gif(frames, mode, bar, temp)
+                device.send_gif_paced(temp)
+            finally:
+                os.unlink(temp)
+        else:
+            index = min(remembered.get("frame", 0), len(frames) - 1)
+            device.upload_still(fit_image(frames[index], mode, bar))
+        return " Screen picture restored."
+    except Exception as exc:  # the colours already landed; say so, don't fail
+        return f" Screen picture not restored: {exc}"
+
+
+def sync_theme(force: bool = False) -> tuple[int, str]:
+    """Paint the keyboard from the desktop colours. Returns (exit code, message).
+
+    Does nothing unless "Follow desktop colours" is on, or ``force`` is set.
+    """
+    import fcntl
+
+    settings = load_settings()
+    if not (force or settings.get("theme_sync")):
+        return 0, "Follow desktop colours is off."
+    if IMPORT_ERROR:
+        return 1, f"Cannot sync: {IMPORT_ERROR}"
+
+    # Coalesce: every caller stamps a token, waits, and only the newest goes on.
+    token = f"{os.getpid()}-{time.monotonic_ns()}"
+    pending = _runtime_dir() / "epomaker-rt100-sync.pending"
+    pending.write_text(token)
+    time.sleep(THEME_SYNC_SETTLE_S)
+    if pending.read_text() != token:
+        return 0, "Superseded by a newer request."
+
+    with open(_runtime_dir() / "epomaker-rt100-sync.lock", "a+") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        lock.seek(0)
+        try:
+            last = float(lock.read() or 0)
+        except ValueError:
+            last = 0.0
+        time.sleep(max(0.0, last + THEME_SYNC_MIN_GAP_S - time.time()))
+
+        colours = desktop_colours()
+        if colours is None:
+            return 1, "No desktop colours found (looked for Omarchy's theme)."
+        accent, text = vivid(colours[0]), colours[1]
+        names = settings.get("theme_sync_keys", THEME_SYNC_DEFAULT_KEYS)
+
+        device: RT100 | None = None
+        guard = DaemonGuard()
+        try:
+            guard.stop()
+            # Always interface 2: see DEFAULT_INTERFACE for why the others are unsafe.
+            device = RT100(load_main_config(), interface=DEFAULT_INTERFACE)
+            device.open_device()
+            device.apply_key_colours(theme_key_colours(
+                KeyboardKeys(device.keymap_config), names, accent, text,
+                settings.get("backslash_index_name", "HASH"),
+            ))
+            lock.seek(0)
+            lock.truncate()
+            lock.write(str(time.time()))
+            lock.flush()
+            message = (
+                f"Synced: {len(names)} keys #{bytes(accent).hex()}, "
+                f"rest #{bytes(text).hex()}." + _restore_screen(device, settings)
+            )
+            return 0, message
+        except DevicePermission as exc:
+            return 1, f"{UDEV_FIX}\n\n({exc})"
+        except (DeviceMissing, DeviceBusy, ValueError) as exc:
+            return 1, f"Keyboard not available: {exc}"
+        finally:
+            if device is not None:
+                try:
+                    device.close_device()
+                except Exception:
+                    pass
+            guard.restart()

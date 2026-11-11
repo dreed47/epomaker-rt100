@@ -5,6 +5,10 @@ start-daemon`, which opens interface 0 (the one carrying key input, so holding
 it interferes with typing) and inherits working-directory-relative config paths.
 
     python -m epomaker_rt100.daemon [SENSOR_KEY]
+    python -m epomaker_rt100.daemon --sync-theme [--force]
+
+--sync-theme paints the keys from the desktop colours once and exits; it does
+nothing unless "Follow desktop colours" is on (or --force is given).
 
 The interface comes from the saved settings so the GUI and the service always
 agree about which one to hold.
@@ -18,6 +22,10 @@ from . import core
 
 
 def main() -> int:
+    if "--sync-theme" in sys.argv[1:]:
+        code, message = core.sync_theme(force="--force" in sys.argv[1:])
+        print(message, file=sys.stderr if code else sys.stdout)
+        return code
     sensor = None
     for arg in sys.argv[1:]:
         if not arg.startswith("-"):

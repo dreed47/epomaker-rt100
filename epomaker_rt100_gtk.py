@@ -1170,8 +1170,92 @@ class Window(Adw.ApplicationWindow):
         group.add(self.backslash_row)
         page.add(group)
 
+        page.add(self._theme_sync_group())
+
         self.build_keycaps()
         return page
+
+    # Matches core.THEME_SYNC_DEFAULT_KEYS; the GTK front end does not import core.
+    THEME_SYNC_DEFAULT_KEYS = [
+        "LEFT_SHIFT", "RIGHT_SHIFT", "LEFT_CTRL", "RIGHT_CTRL",
+        "LEFT_ALT", "RIGHT_ALT", "LEFT_WIN", "FN",
+    ]
+
+    def _theme_sync_group(self) -> Adw.PreferencesGroup:
+        group = Adw.PreferencesGroup(
+            title="Follow desktop colours",
+            description=(
+                "Light the chosen keys in your desktop's accent colour and the rest "
+                "in its text colour, and update them when the theme changes. "
+                "Reads Omarchy's theme and bar colour."
+            ),
+        )
+        self.theme_sync_row = Adw.SwitchRow(
+            title="Follow desktop colours",
+            active=bool(self.settings.get("theme_sync", False)),
+        )
+        self.theme_sync_row.connect("notify::active", self.on_theme_sync_toggled)
+        group.add(self.theme_sync_row)
+
+        self.theme_keys_row = Adw.ActionRow(title="Keys in the accent colour")
+        use = Gtk.Button(label="Use selected keys", valign=Gtk.Align.CENTER)
+        use.set_tooltip_text("Select keys on the layout above first.")
+        use.connect("clicked", self.on_theme_keys_from_selection)
+        self.theme_keys_row.add_suffix(use)
+        sync = Gtk.Button(label="Sync now", valign=Gtk.Align.CENTER)
+        sync.connect("clicked", lambda *_: self.run_theme_sync())
+        self.theme_keys_row.add_suffix(sync)
+        group.add(self.theme_keys_row)
+        self._refresh_theme_keys_row()
+        return group
+
+    def _theme_keys(self) -> list[str]:
+        return list(self.settings.get("theme_sync_keys", self.THEME_SYNC_DEFAULT_KEYS))
+
+    def _refresh_theme_keys_row(self) -> None:
+        keys = self._theme_keys()
+        self.theme_keys_row.set_subtitle(
+            f"{len(keys)} keys: " + ", ".join(k.replace("_", " ").title() for k in keys)
+        )
+
+    def on_theme_sync_toggled(self, row: Adw.SwitchRow, *_args) -> None:
+        self.settings["theme_sync"] = row.get_active()
+        save_settings(self.settings)
+        if row.get_active():
+            self.run_theme_sync()
+
+    def on_theme_keys_from_selection(self, *_args) -> None:
+        if not self.picked:
+            self.toast("Select some keys on the layout first.")
+            return
+        self.settings["theme_sync_keys"] = sorted(self.picked)
+        save_settings(self.settings)
+        self._refresh_theme_keys_row()
+        self.run_theme_sync()
+
+    def run_theme_sync(self) -> None:
+        """Sync through the headless command, so the device logic lives in core."""
+        if self.busy:
+            self.toast("Already talking to the keyboard.")
+            return
+        self.busy = True
+
+        def body() -> None:
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-m", "epomaker_rt100.daemon",
+                     "--sync-theme", "--force"],
+                    capture_output=True, text=True, timeout=120,
+                )
+                output = (result.stdout or result.stderr).strip()
+                if result.returncode == 0:
+                    GLib.idle_add(self._finish, output or "Synced.", None)
+                else:
+                    GLib.idle_add(self._finish, None, output or "Sync failed.")
+            except (OSError, subprocess.SubprocessError) as exc:
+                GLib.idle_add(self._finish, None, f"Sync failed: {exc}")
+
+        threading.Thread(target=body, daemon=True, name="rt100-sync").start()
 
     def _screen_page(self) -> Gtk.Widget:
         page = Adw.PreferencesPage()
