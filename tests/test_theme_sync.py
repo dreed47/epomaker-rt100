@@ -28,6 +28,10 @@ assert core.vivid((0x8B, 0xE9, 0xFD)) == (0, 0xD2, 0xFF)
 assert core.vivid((0xD9, 0xA8, 0x62)) == (0xFF, 0x96, 0)
 assert core.vivid((0x80, 0x80, 0x80)) == (255, 255, 255)
 
+# led_gamma: mid channels drop, ends stay put.
+assert core.led_gamma((0xFF, 0x9C, 0x00)) == (0xFF, 87, 0)
+assert core.led_gamma((255, 255, 255)) == (255, 255, 255)
+
 # desktop_colours: nothing on disk -> None.
 assert core.desktop_colours() is None
 

@@ -1101,6 +1101,19 @@ def vivid(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
     return tuple(round((c - low) * 255 / (high - low)) for c in rgb)  # type: ignore[return-value]
 
 
+LED_GAMMA = 2.2
+
+
+def led_gamma(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
+    """Screen colour -> LED drive level.
+
+    Screen values are gamma-encoded but the LEDs are driven linearly, so mid
+    channels show far too bright: a screen orange (FF9C00) reads as yellow on
+    the keys. 2.2 (the usual sRGB approximation) confirmed by eye on an RT100.
+    """
+    return tuple(round((c / 255) ** LED_GAMMA * 255) for c in rgb)  # type: ignore[return-value]
+
+
 def desktop_colours() -> tuple[tuple[int, int, int], tuple[int, int, int]] | None:
     """(accent, text) from the desktop, or None when no source is found.
 
@@ -1188,7 +1201,7 @@ def sync_theme(force: bool = False) -> tuple[int, str]:
         colours = desktop_colours()
         if colours is None:
             return 1, "No desktop colours found (looked for Omarchy's theme)."
-        accent, text = vivid(colours[0]), colours[1]
+        accent, text = led_gamma(vivid(colours[0])), led_gamma(colours[1])
         names = settings.get("theme_sync_keys", THEME_SYNC_DEFAULT_KEYS)
 
         device: RT100 | None = None
