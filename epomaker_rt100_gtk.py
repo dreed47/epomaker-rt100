@@ -275,17 +275,13 @@ ANSI_LAYOUT: dict[str, tuple[float, float, float, float]] = {
     "NUMPAD_1": (15.5, 4.5, 1, 1), "NUMPAD_2": (16.5, 4.5, 1, 1),
     "NUMPAD_3": (17.5, 4.5, 1, 1), "NUMPAD_ENTER": (18.5, 4.5, 1, 2),
     # Bottom row.
-    # The leftmost/rightmost Ctrl names follow the library's own ISO layout
-    # file, which lists RIGHT_CTRL first and LEFT_CTRL last. That looks like an
-    # upstream mix-up, but it is the only record of the mapping and the LED
-    # indices are not geometric (index 11 is the DIAL, which sits top-right),
-    # so it cannot be derived. Both caps read "Ctrl"; if the wrong one lights,
-    # swap these two names.
-    "RIGHT_CTRL": (0, 5.5, 1.25, 1),
+    # LEFT_CTRL is the leftmost Ctrl: LED 5 confirmed on hardware 2026-11-11.
+    # (An earlier version swapped these to match the library's ISO layout file.)
+    "LEFT_CTRL": (0, 5.5, 1.25, 1),
     "LEFT_WIN": (1.25, 5.5, 1.25, 1),
     "LEFT_ALT": (2.5, 5.5, 1.25, 1),
     "SPACE": (3.75, 5.5, 5.25, 1),
-    "RIGHT_ALT": (9, 5.5, 1, 1), "FN": (10, 5.5, 1, 1), "LEFT_CTRL": (11, 5.5, 1, 1),
+    "RIGHT_ALT": (9, 5.5, 1, 1), "FN": (10, 5.5, 1, 1), "RIGHT_CTRL": (11, 5.5, 1, 1),
     "LEFT": (12, 5.5, 1, 1), "DOWN": (13, 5.5, 1, 1), "RIGHT": (14, 5.5, 1, 1),
     "NUMPAD_0": (15.5, 5.5, 2, 1), "NUMPAD_DOT": (17.5, 5.5, 1, 1),
 }
