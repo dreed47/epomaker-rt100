@@ -294,6 +294,21 @@ LAYOUT_UNITS_W = 19.5
 LAYOUT_UNITS_H = 6.5
 UNIT_PX = 34
 
+
+def _widen_page(page: "Adw.PreferencesPage", width: int) -> None:
+    """Let a page's content grow past Adw.PreferencesPage's fixed 600 px clamp.
+
+    The key layout is wider than 600 px, so the Dial column ended up hidden
+    behind a sideways scroll. The page has no property for this; its tree is
+    ScrolledWindow > Viewport > Clamp (libadwaita 1.10). If that changes, the
+    page simply keeps the default width.
+    """
+    scrolled = page.get_first_child()
+    viewport = scrolled.get_first_child() if scrolled else None
+    clamp = viewport.get_first_child() if viewport else None
+    if isinstance(clamp, Adw.Clamp):
+        clamp.set_maximum_size(max(width, clamp.get_maximum_size()))
+
 # Nicer captions than the library's display_str for a few keys. Plain words
 # rather than symbols like U+232B/U+21B5, which live in fallback fonts and are
 # not guaranteed to be installed. The arrow keys keep the library's ← ↑ ↓ →.
@@ -1173,6 +1188,7 @@ class Window(Adw.ApplicationWindow):
         page.add(self._theme_sync_group())
 
         self.build_keycaps()
+        _widen_page(page, int(LAYOUT_UNITS_W * UNIT_PX) + 60)
         return page
 
     # Matches core.THEME_SYNC_DEFAULT_KEYS; the GTK front end does not import core.
