@@ -1922,7 +1922,15 @@ class Window(Adw.ApplicationWindow):
         r, g, b = _rgb(self.solid_colour.get_rgba())
 
         def work(dev: RT100) -> str:
-            dev.set_rgb_all_keys(r, g, b)
+            # Not dev.set_rgb_all_keys(): it sends unpaced, and the firmware
+            # drops the high-index (right-hand) keys. Same paced path as Send.
+            keys = KeyboardKeys(dev.keymap_config)
+            mapping = EpomakerKeyRGBCommand.KeyMap(keys)
+            for key in keys:
+                mapping[key] = (r, g, b)
+            frame = EpomakerKeyRGBCommand.KeyboardRGBFrame(key_map=mapping)
+            command = EpomakerKeyRGBCommand.EpomakerKeyRGBCommand([frame])
+            dev.send_paced(command, ERASE_DELAY_S, KEY_PACKET_DELAY_S)
             return f"All keys set to rgb({r}, {g}, {b})."
 
         self.run_on_device("Solid colour", work, restore_screen=True)

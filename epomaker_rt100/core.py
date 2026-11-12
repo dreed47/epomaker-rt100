@@ -580,7 +580,10 @@ class RT100(EpomakerController if not IMPORT_ERROR else object):  # type: ignore
     # -- convenience wrappers so front ends never build commands themselves --
 
     def apply_solid(self, rgb: tuple[int, int, int]) -> None:
-        self.set_rgb_all_keys(*rgb)
+        # Not set_rgb_all_keys(): it sends unpaced, and the firmware drops the
+        # high-index (right-hand) keys. Paced like every other key frame.
+        keys = KeyboardKeys(self.keymap_config)
+        self.apply_key_colours({key.value: rgb for key in keys})
 
     def apply_key_colours(self, index_to_rgb: dict[int, tuple[int, int, int]]) -> None:
         keys = KeyboardKeys(self.keymap_config)
