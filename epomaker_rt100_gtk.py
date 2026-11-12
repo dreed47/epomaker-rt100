@@ -503,6 +503,12 @@ def scan_bus() -> dict[str, object]:
 # --------------------------------------------------------------------------- #
 
 
+# Matches core.THEME_SYNC_SERVICE; the GTK front end does not import core.
+THEME_SYNC_SERVICE = os.environ.get(
+    "EPOMAKER_THEME_SERVICE_NAME", "epomaker-theme-sync.service"
+)
+
+
 class UserUnit:
     """Talk to a systemd --user unit.
 
@@ -1197,9 +1203,8 @@ class Window(Adw.ApplicationWindow):
         group = Adw.PreferencesGroup(
             title="Follow desktop colours",
             description=(
-                "Light the chosen keys in your desktop's accent colour and the rest "
-                "in its text colour, and update them when the theme changes. "
-                "Reads Omarchy's theme and bar colour."
+                "Colour the chosen keys and all other keys separately. Each can "
+                "follow your desktop's colour or use one you pick."
             ),
         )
         self.theme_sync_row = Adw.SwitchRow(
@@ -1208,6 +1213,31 @@ class Window(Adw.ApplicationWindow):
         )
         self.theme_sync_row.connect("notify::active", self.on_theme_sync_toggled)
         group.add(self.theme_sync_row)
+
+        self.theme_source_row = Adw.ComboRow(
+            title="Accent colour from",
+            model=Gtk.StringList.new(["Desktop accent colour", "A command"]),
+            selected=1 if self.settings.get("theme_sync_source") == "command" else 0,
+        )
+        self.theme_source_row.set_subtitle(
+            "GNOME and KDE share an accent colour. Other desktops need a command."
+        )
+        self.theme_source_row.connect("notify::selected", self.on_theme_source_changed)
+        group.add(self.theme_source_row)
+
+        self.theme_command_row = Adw.EntryRow(
+            title="Colour command (prints the accent, optionally a second colour)",
+            text=self.settings.get("theme_sync_command", ""),
+            show_apply_button=True,
+        )
+        self.theme_command_row.connect("apply", self.on_theme_command_applied)
+        group.add(self.theme_command_row)
+
+        self.theme_chosen_mode, self.theme_chosen = self._theme_colour_row(
+            group, "Chosen keys", "theme_sync_chosen", "#ff8000", "desktop")
+        self.theme_other_mode, self.theme_other = self._theme_colour_row(
+            group, "All other keys", "theme_sync_other", "#ffffff", "custom")
+        self._refresh_theme_source()
 
         self.theme_keys_row = Adw.ActionRow(title="Keys in the accent colour")
         use = Gtk.Button(label="Use selected keys", valign=Gtk.Align.CENTER)
@@ -1231,10 +1261,58 @@ class Window(Adw.ApplicationWindow):
         )
 
     def on_theme_sync_toggled(self, row: Adw.SwitchRow, *_args) -> None:
-        self.settings["theme_sync"] = row.get_active()
+        on = row.get_active()
+        self.settings["theme_sync"] = on
         save_settings(self.settings)
-        if row.get_active():
+        # The watcher service follows desktop accent changes while this is on.
+        unit = UserUnit(THEME_SYNC_SERVICE)
+        if unit.exists():
+            error = unit.set_enabled(on) or (unit.start() if on else unit.stop())
+            if error:
+                self.toast(f"Could not {'start' if on else 'stop'} the watcher: {error}")
+        if on:
             self.run_theme_sync()
+
+    def _refresh_theme_source(self) -> None:
+        self.theme_command_row.set_visible(self.theme_source_row.get_selected() == 1)
+
+    def on_theme_source_changed(self, row: Adw.ComboRow, *_args) -> None:
+        self.settings["theme_sync_source"] = "command" if row.get_selected() == 1 else "desktop"
+        save_settings(self.settings)
+        self._refresh_theme_source()
+
+    def on_theme_command_applied(self, row: Adw.EntryRow) -> None:
+        self.settings["theme_sync_command"] = row.get_text().strip()
+        save_settings(self.settings)
+        self.run_theme_sync()
+
+    def _theme_colour_row(self, group, title: str, key: str, default: str,
+                          default_mode: str):
+        """A "Desktop colour / My colour" drop-down with the own-colour button."""
+        row = Adw.ComboRow(
+            title=title,
+            model=Gtk.StringList.new(["Desktop colour", "My colour"]),
+            selected=0 if self.settings.get(f"{key}_mode", default_mode) == "desktop" else 1,
+        )
+        button = Gtk.ColorDialogButton(dialog=Gtk.ColorDialog(), valign=Gtk.Align.CENTER)
+        button.set_rgba(_rgba(self.settings.get(key, default)))
+        button.set_sensitive(row.get_selected() == 1)
+        row.add_suffix(button)
+
+        def on_mode(combo, *_args) -> None:
+            own = combo.get_selected() == 1
+            button.set_sensitive(own)
+            self.settings[f"{key}_mode"] = "custom" if own else "desktop"
+            save_settings(self.settings)
+
+        def on_colour(btn, *_args) -> None:
+            self.settings[key] = _hex(btn.get_rgba())
+            save_settings(self.settings)
+
+        row.connect("notify::selected", on_mode)
+        button.connect("notify::rgba", on_colour)
+        group.add(row)
+        return row, button
 
     def on_theme_keys_from_selection(self, *_args) -> None:
         if not self.picked:

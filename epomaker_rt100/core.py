@@ -1044,10 +1044,12 @@ def run_daemon(sensor: str | None, interface: int = DEFAULT_INTERFACE) -> int:
 # --------------------------------------------------------------------------- #
 # Follow desktop colours
 #
-# Paints one group of keys in the desktop's accent colour and every other key
-# in its text colour, whenever something (a theme hook, a file watcher, the
-# "Sync now" button) runs ``epomaker-rt100-daemon --sync-theme``. The front ends
-# only edit the settings; all device work lives here so they cannot disagree.
+# Paints one group of keys in an accent colour and every other key in a second
+# colour. The accent comes from the desktop (the XDG portal's accent-color, as
+# set by GNOME and KDE) or from a user command for desktops without one. It
+# runs on ``epomaker-rt100-daemon --sync-theme`` (Sync now, or a user's own
+# hook) and from ``--watch-theme``, a user service that follows portal changes.
+# The front ends only edit the settings; all device work lives here.
 # --------------------------------------------------------------------------- #
 
 THEME_SYNC_DEFAULT_KEYS = [
@@ -1065,15 +1067,6 @@ THEME_SYNC_MIN_GAP_S = 5.0
 
 def _runtime_dir() -> Path:
     return Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir())
-
-
-def _read_toml(path: Path) -> dict:
-    import tomllib
-
-    try:
-        return tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
 
 
 def _hex_rgb(value) -> tuple[int, int, int] | None:
@@ -1111,22 +1104,108 @@ def led_gamma(rgb: tuple[int, int, int]) -> tuple[int, int, int]:
     return tuple(round((c / 255) ** LED_GAMMA * 255) for c in rgb)  # type: ignore[return-value]
 
 
-def desktop_colours() -> tuple[tuple[int, int, int], tuple[int, int, int]] | None:
-    """(accent, text) from the desktop, or None when no source is found.
+THEME_SYNC_DEFAULT_OTHER = "#ffffff"
+_PORTAL = ("--dest", "org.freedesktop.portal.Desktop",
+           "--object-path", "/org/freedesktop/portal/desktop")
 
-    The only source so far is Omarchy: the bar background override in
-    ~/.config/omarchy/shell.toml (set by bar-colour plugins) wins over the
-    current theme's ``accent``; text is the theme's ``foreground``.
+
+def parse_portal_accent(output: str) -> tuple[int, int, int] | None:
+    """The (r, g, b) doubles in gdbus output, as 0-255; None when unset.
+
+    The portal spec says out-of-range values mean "no accent colour set".
     """
-    config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    state = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-    theme = _read_toml(state / "omarchy" / "current" / "theme" / "colors.toml")
-    bar = _read_toml(config / "omarchy" / "shell.toml").get("bar", {})
-    accent = _hex_rgb(bar.get("background")) or _hex_rgb(theme.get("accent"))
-    text = _hex_rgb(theme.get("foreground"))
-    if accent is None or text is None:
+    import re
+
+    match = re.search(r"\(\s*([-\d.e]+),\s*([-\d.e]+),\s*([-\d.e]+)\s*\)", output)
+    if not match:
         return None
-    return accent, text
+    channels = [float(v) for v in match.groups()]
+    if not all(0.0 <= c <= 1.0 for c in channels):
+        return None
+    return tuple(round(c * 255) for c in channels)  # type: ignore[return-value]
+
+
+def portal_accent() -> tuple[int, int, int] | None:
+    """The desktop accent from org.freedesktop.appearance, via gdbus (GLib)."""
+    try:
+        result = subprocess.run(
+            ["gdbus", "call", "--session", *_PORTAL,
+             "--method", "org.freedesktop.portal.Settings.ReadOne",
+             "org.freedesktop.appearance", "accent-color"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_portal_accent(result.stdout) if result.returncode == 0 else None
+
+
+def parse_command_colours(output: str) -> list[tuple[int, int, int]]:
+    """Every #RRGGBB / RRGGBB word in a colour command's output, in order."""
+    found = []
+    for word in output.split():
+        rgb = _hex_rgb(word)
+        if rgb is not None:
+            found.append(rgb)
+    return found
+
+
+def command_colours(command: str) -> list[tuple[int, int, int]]:
+    """Run the user's colour command; it prints the accent, then optionally
+    the colour for the other keys. The command comes from the user's own
+    settings file, so it runs with their shell, like a desktop hook would."""
+    try:
+        result = subprocess.run(
+            ["sh", "-c", command], capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return parse_command_colours(result.stdout) if result.returncode == 0 else []
+
+
+THEME_SYNC_DEFAULT_CHOSEN = "#ff8000"
+
+
+def _desktop_list(settings: dict) -> list[tuple[int, int, int]] | str:
+    """The desktop's colours, accent first, or a message saying what is missing."""
+    if settings.get("theme_sync_source") == "command":
+        command = (settings.get("theme_sync_command") or "").strip()
+        if not command:
+            return "No colour command is set."
+        colours = command_colours(command)
+        return colours or "The colour command printed no colour."
+    accent = portal_accent()
+    if accent is None:
+        return ("This desktop does not share an accent colour. "
+                "Use a colour command instead.")
+    return [accent]
+
+
+def desktop_colours(settings: dict) -> tuple[tuple[int, int, int], tuple[int, int, int]] | str:
+    """LED-ready (chosen keys, other keys) colours, or a message saying what is missing.
+
+    Each group either follows the desktop or uses the user's own colour. The
+    chosen keys take the desktop accent; the other keys take the command's
+    second colour if it printed one, else the accent too (portals share only
+    one colour). The accent is pushed to full saturation, since desktop accents
+    are often pastels the LEDs wash out; everything is gamma-corrected.
+    """
+    chosen_desktop = settings.get("theme_sync_chosen_mode", "desktop") == "desktop"
+    other_desktop = settings.get("theme_sync_other_mode", "custom") == "desktop"
+    found: list[tuple[int, int, int]] = []
+    if chosen_desktop or other_desktop:
+        listed = _desktop_list(settings)
+        if isinstance(listed, str):
+            return listed
+        found = listed
+    accent = vivid(found[0]) if found else (255, 255, 255)
+    second = found[1] if len(found) > 1 else accent
+
+    def own(key: str, default: str) -> tuple[int, int, int]:
+        return _hex_rgb(settings.get(key, default)) or _hex_rgb(default)  # type: ignore[return-value]
+
+    chosen = accent if chosen_desktop else own("theme_sync_chosen", THEME_SYNC_DEFAULT_CHOSEN)
+    other = second if other_desktop else own("theme_sync_other", THEME_SYNC_DEFAULT_OTHER)
+    return led_gamma(chosen), led_gamma(other)
 
 
 def theme_key_colours(
@@ -1195,10 +1274,10 @@ def sync_theme(force: bool = False) -> tuple[int, str]:
             last = 0.0
         time.sleep(max(0.0, last + THEME_SYNC_MIN_GAP_S - time.time()))
 
-        colours = desktop_colours()
-        if colours is None:
-            return 1, "No desktop colours found (looked for Omarchy's theme)."
-        accent, text = led_gamma(vivid(colours[0])), led_gamma(colours[1])
+        colours = desktop_colours(settings)
+        if isinstance(colours, str):
+            return 1, colours
+        accent, text = colours
         names = settings.get("theme_sync_keys", THEME_SYNC_DEFAULT_KEYS)
 
         device: RT100 | None = None
@@ -1232,3 +1311,34 @@ def sync_theme(force: bool = False) -> tuple[int, str]:
                 except Exception:
                     pass
             guard.restart()
+
+
+THEME_SYNC_SERVICE = os.environ.get(
+    "EPOMAKER_THEME_SERVICE_NAME", "epomaker-theme-sync.service"
+)
+
+
+def watch_theme() -> int:
+    """Sync once, then again whenever the portal's accent colour changes.
+
+    Runs as its own user unit rather than inside the screen updater, because
+    every sync stops that service (it holds the device) and would kill itself.
+    A colour command has no change signal, so its users call --sync-theme from
+    their own desktop hook instead; this loop still covers the portal.
+    """
+    code, message = sync_theme()
+    print(message, flush=True)
+    try:
+        monitor = subprocess.Popen(
+            ["gdbus", "monitor", "--session", *_PORTAL],
+            stdout=subprocess.PIPE, text=True,
+        )
+    except OSError as exc:
+        print(f"Cannot watch the desktop colour: {exc}", file=sys.stderr)
+        return 1
+    assert monitor.stdout is not None
+    for line in monitor.stdout:
+        if "SettingChanged" in line and "accent-color" in line:
+            code, message = sync_theme()
+            print(message, file=sys.stderr if code else sys.stdout, flush=True)
+    return monitor.wait()
