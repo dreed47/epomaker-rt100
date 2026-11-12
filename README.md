@@ -87,9 +87,9 @@ carrying key input — so it interferes with typing.
 
 ## Follow desktop colours
 
-On the Backlight tab, **Follow desktop colours** colours two groups: the chosen
+On the Backlight tab, **Follow desktop colours** colours two groups: the accent
 keys (the modifiers, or any keys you select) and all other keys. Each group
-either follows the desktop or uses a colour you pick. The chosen keys take the
+either follows the desktop or uses a colour you pick. The accent keys take the
 desktop accent; all other keys take a command's second colour if it prints
 one, otherwise the accent too. The keys repaint when the desktop colour changes.
 

@@ -1203,7 +1203,7 @@ class Window(Adw.ApplicationWindow):
         group = Adw.PreferencesGroup(
             title="Follow desktop colours",
             description=(
-                "Colour the chosen keys and all other keys separately. Each can "
+                "Colour the accent keys and all other keys separately. Each can "
                 "follow your desktop's colour or use one you pick."
             ),
         )
@@ -1234,7 +1234,7 @@ class Window(Adw.ApplicationWindow):
         group.add(self.theme_command_row)
 
         self.theme_chosen_mode, self.theme_chosen = self._theme_colour_row(
-            group, "Chosen keys", "theme_sync_chosen", "#ff8000", "desktop")
+            group, "Accent keys", "theme_sync_chosen", "#ff8000", "desktop")
         self.theme_other_mode, self.theme_other = self._theme_colour_row(
             group, "All other keys", "theme_sync_other", "#ffffff", "custom")
         self._refresh_theme_source()

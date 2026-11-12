@@ -1181,10 +1181,10 @@ def _desktop_list(settings: dict) -> list[tuple[int, int, int]] | str:
 
 
 def desktop_colours(settings: dict) -> tuple[tuple[int, int, int], tuple[int, int, int]] | str:
-    """LED-ready (chosen keys, other keys) colours, or a message saying what is missing.
+    """LED-ready (accent keys, other keys) colours, or a message saying what is missing.
 
     Each group either follows the desktop or uses the user's own colour. The
-    chosen keys take the desktop accent; the other keys take the command's
+    accent keys take the desktop accent; the other keys take the command's
     second colour if it printed one, else the accent too (portals share only
     one colour). The accent is pushed to full saturation, since desktop accents
     are often pastels the LEDs wash out; everything is gamma-corrected.

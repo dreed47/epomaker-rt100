@@ -1,7 +1,7 @@
 #!/bin/sh
 # Colour command for "Follow desktop colours" on Omarchy, which has no portal
 # accent colour. Prints the accent (the bar colour if one is set, otherwise
-# the theme accent), then the theme's text colour, which "All other keys" uses
+# the theme accent), then the theme accent colour, which "All other keys" uses
 # when set to "Desktop colour".
 #
 # To repaint on every theme change, add an Omarchy hook that runs:
@@ -19,4 +19,4 @@ value() { # value FILE SECTION KEY: first "#RRGGBB" for KEY inside [SECTION] (""
 
 accent=$(value "$shell" bar background)
 [ -n "$accent" ] || accent=$(value "$theme" "" accent)
-echo "$accent $(value "$theme" "" foreground)"
+echo "$accent $(value "$theme" "" accent)"
